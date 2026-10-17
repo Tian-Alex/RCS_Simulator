@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>火箭 6-DOF 冷氣 RCS 姿態控制模擬器</title>
+  <meta name="description" content="學術級剛體 6-DOF 火箭姿態控制模擬：四元數動力學、Newton–Euler 方程、冷氣 RCS、PID/LQR/Quaternion-PD 控制、PWPF/PWM 調變、3D 動畫與時間序列圖表。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='24' font-size='24'>🚀</text></svg>" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <h1>火箭 6-DOF 姿態控制模擬器</h1>
+        <p class="brand-sub">剛體動力學 · 冷氣 RCS · PID / LQR / Quaternion-PD · PWPF / PWM</p>
+      </div>
+    </div>
+    <div class="run-controls">
+      <button id="btn-reset" class="btn" data-testid="button-reset" title="以目前參數重置模擬">重置</button>
+      <button id="btn-run" class="btn btn-primary" data-testid="button-run">開始</button>
+      <button id="btn-ff" class="btn" data-testid="button-ff" title="直接計算至模擬結束">快轉完成</button>
+      <label class="speed-wrap">速率
+        <select id="speed" data-testid="select-speed">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="5">5×</option>
+          <option value="10">10×</option>
+        </select>
+      </label>
+      <span id="sim-clock" class="clock" data-testid="text-clock">t = 0.00 s</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- 左側：參數面板 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <h2>參數設定</h2>
+        <div class="preset-row">
+          <button class="btn btn-small" data-preset="small" data-testid="button-preset-small">小型</button>
+          <button class="btn btn-small" data-preset="medium" data-testid="button-preset-medium">中型（預設）</button>
+          <button class="btn btn-small" data-preset="large" data-testid="button-preset-large">大型</button>
+        </div>
+        <div class="io-row">
+          <button id="btn-export-case" class="btn btn-small" data-testid="button-export-case">匯出案例 JSON</button>
+          <button id="btn-import-case" class="btn btn-small" data-testid="button-import-case">匯入案例 JSON</button>
+          <input type="file" id="file-case" accept=".json" hidden />
+        </div>
+        <p id="validate-msg" class="validate-msg" role="status"></p>
+      </div>
+      <div id="param-panels"></div>
+    </aside>
+
+    <!-- 右側：3D + 圖表 -->
+    <section class="stage">
+      <div class="view3d-wrap">
+        <div id="view3d" data-testid="canvas-3d"></div>
+        <div class="view3d-hud">
+          <span id="hud-att" class="hud-item" data-testid="text-att"></span>
+          <span id="hud-rate" class="hud-item"></span>
+          <span id="hud-err" class="hud-item"></span>
+          <span id="hud-prop" class="hud-item"></span>
+        </div>
+        <div class="view3d-legend">
+          <span class="lg lg-x">X (roll)</span><span class="lg lg-y">Y (pitch)</span><span class="lg lg-z">Z (yaw)</span>
+          <span class="lg lg-tgt">目標姿態</span><span class="lg lg-fire">RCS 點火</span>
+        </div>
+      </div>
+
+      <div class="charts-zone">
+        <div class="charts-tabs" id="chart-tabs" role="tablist">
+          <button class="tab active" data-tab="attitude" role="tab">姿態（Roll/Pitch/Yaw）</button>
+          <button class="tab" data-tab="error" role="tab">姿態誤差角</button>
+          <button class="tab" data-tab="rates" role="tab">角速度</button>
+          <button class="tab" data-tab="torque" role="tab">力矩（指令 vs 實際）</button>
+          <button class="tab" data-tab="valves" role="tab">RCS 開關歷程</button>
+          <button class="tab" data-tab="propellant" role="tab">推進劑與 Δv</button>
+          <button class="tab" data-tab="trans" role="tab">平移狀態</button>
+          <button class="tab" data-tab="phase" role="tab">相圖</button>
+          <button class="tab" data-tab="metrics" role="tab">效能指標</button>
+        </div>
+        <div class="chart-host">
+          <div id="chart-box" class="chart-box"></div>
+          <div id="metrics-box" class="metrics-box" hidden></div>
+          <div id="lqr-box" class="lqr-box" hidden></div>
+        </div>
+        <div class="charts-actions">
+          <button id="btn-csv" class="btn btn-small" data-testid="button-csv">匯出 CSV</button>
+          <span class="hint">圖表於模擬進行中即時更新；資料取樣間隔 = 記錄間隔（預設 0.05 s）</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <footer class="foot">
+    <p>模型與方程式出處詳見 <a href="docs/equations.md" target="_blank" rel="noopener">docs/equations.md</a> ·
+    數值核心通過 15 項回歸測試（<code>test/runTests.mjs</code>）· 完全於瀏覽器執行，無後端</p>
+  </footer>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
