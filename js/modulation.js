@@ -23,8 +23,11 @@ export class Pwpf {
   }
   // u：正規化輸入（τ_cmd/τ̂，−1..1）；dt：步長
   step(u, dt) {
-    // 一階低通濾波：u̇_f = (Km·u − u_f)/Tm（docs §5.1）
-    this.uf += ((this.Km * u - this.uf) / this.Tm) * dt;
+    // 一階低通濾波（標準 PWPF 拓撲含輸出回授）：
+    //   濾波器輸入 = u − s（s 為目前輸出狀態）→ u̇_f = (Km(u−s) − u_f)/Tm
+    //   點火時 s=±1 使 u_f 反向衰減 → 關閉；關閉時 u_f 朝指令回升 → 再點火，
+    //   形成脈寬（濾波時間常數決定）與脈頻（遲滯帶決定）之自然調變
+    this.uf += ((this.Km * (u - this.state) - this.uf) / this.Tm) * dt;
     // 遲滯繼電器（對稱三態）
     if (this.uf >= this.Uon) this.state = 1;
     else if (this.uf <= -this.Uon) this.state = -1;
@@ -47,7 +50,8 @@ export class Modulator {
   reset() {
     this.pwpf.forEach((m) => m.reset());
     this.pwmPhase = 0;
-    this.pwmResidual = [0, 0, 0]; // PWM 殘差追蹤累積器
+    this.pwmResidual = [0, 0, 0]; // PWM 殘差追蹤累積器 [s]
+    this.pulseRemain = [0, 0, 0]; // 跳脫脈衝剩餘點火時間 [s]
   }
   setCapacity(tauCap) { this.tauCap = tauCap.slice(); }
 
@@ -65,17 +69,22 @@ export class Modulator {
       states = u.map((x, a) => {
         const duty = clamp(Math.abs(x), 0, 1);
         if (duty < 1e-9) { this.pwmResidual[a] = 0; return 0; }
-        // 殘差追蹤：當要求的 on-time 低於最小脈衝寬度時累積殘差，
-        // 足夠時才點火（pulse skipping），避免直接捨去造成死區
-        let effDuty = duty;
-        const minDuty = this.minPulse / this.pwmPeriod;
-        if (minDuty > 0 && duty < minDuty) {
-          this.pwmResidual[a] += duty;
-          if (this.pwmResidual[a] < minDuty) return 0;
-          effDuty = this.pwmResidual[a];
-          this.pwmResidual[a] = 0;
+        // 殘差追蹤：當需求 on-time（duty·T_pwm [s]）低於最小脈衝寬度時，
+        // 以時間為單位累積需求（duty·dt，步長無關），累積至 ≥ minPulse 才點火
+        // （pulse skipping），避免直接捨去造成死區。跳脫脈衝以倒數計時器
+        // 交付「完整累積需求」（不受 PWM 相位窗口影響、步長無關）。
+        if (this.pulseRemain[a] > 0) {
+          this.pulseRemain[a] -= dt;
+          return Math.sign(x);
         }
-        return this.pwmPhase < effDuty * this.pwmPeriod ? Math.sign(x) : 0;
+        if (this.minPulse > 0 && duty * this.pwmPeriod < this.minPulse) {
+          this.pwmResidual[a] += duty * dt;
+          if (this.pwmResidual[a] < this.minPulse) return 0;
+          this.pulseRemain[a] = this.pwmResidual[a]; // 交付完整累積需求
+          this.pwmResidual[a] = 0;
+          return Math.sign(x);
+        }
+        return this.pwmPhase < duty * this.pwmPeriod ? Math.sign(x) : 0;
       });
     }
     return states.map((s, a) => s * this.tauCap[a]);

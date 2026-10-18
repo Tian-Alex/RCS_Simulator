@@ -14,7 +14,7 @@ import { derivative, addState, cloneState, rotationalKineticEnergy, inertialAngu
 import { rk4Step } from '../js/integrator.js';
 import { RcsSystem } from '../js/rcs.js';
 import { allocate, axisTorqueCapacity, checkAttainability } from '../js/allocation.js';
-import { Pwpf } from '../js/modulation.js';
+import { Pwpf, Modulator } from '../js/modulation.js';
 import { PidController } from '../js/controllers/pid.js';
 import { LqrController, solveCare, linearize } from '../js/controllers/lqr.js';
 import { QuaternionPdController } from '../js/controllers/quaternionPD.js';
@@ -118,14 +118,28 @@ test('T5a LQR 對角慣量解析解', () => {
     assert.ok(Math.abs(res.K[a][a + 3] - kdExpected) < 1e-6 * kdExpected, `Kd=${res.K[a][a + 3]} 期望 ${kdExpected}`);
   }
 });
-test('T5b LQR 閉迴路極點穩定', () => {
+test('T5b CARE 收斂且 P 正定（Cholesky 驗證）', () => {
   const cfg = presetByName('medium');
   const Jinv = M3.inverse(M3.inertiaTensor(1440, 3387, 3387, 80, -40, 60));
   const res = solveCare(Jinv, [10, 10, 10, 100, 100, 100], [1e5, 1e5, 1e5]);
   assert.ok(res.ok, 'CARE 未收斂');
   assert.ok(res.residual < 1e-8, `CARE 殘差 ${res.residual}`);
-  // 驗證 P 正定
-  for (let i = 0; i < 6; i++) assert.ok(res.P[i][i] > 0);
+  // P 正定：嘗試 Cholesky 分解（對稱正定 ⇔ 分解成功且對角為正）
+  const n = 6;
+  const L = Array.from({ length: n }, () => new Array(n).fill(0));
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j <= i; j++) {
+      let sum = res.P[i][j];
+      for (let k = 0; k < j; k++) sum -= L[i][k] * L[j][k];
+      if (i === j) {
+        assert.ok(sum > 0, `P 非正定：Cholesky 對角 ${i} = ${sum}`);
+        L[i][j] = Math.sqrt(sum);
+      } else {
+        L[i][j] = sum / L[j][j];
+      }
+    }
+  }
+  // P 正定 ⇒ 由 LQR 理論（Q⪰0, R≻0, (A,B) 可穩定）A−BK 穩定；閉迴路收斂另由 T7b 驗證
 });
 
 // ------------------- T6 分配器 -------------------
@@ -226,6 +240,40 @@ test('T7g 半步長重跑軌跡一致（確定性）', () => {
 });
 
 // ------------------- T8 穩定時間語意 -------------------
+test('T7h PWPF 定輸入產生脈衝（非鎖定）', () => {
+  // 固定輸入 u=0.2（預設參數）→ 應產生持續開關脈衝，而非鎖定開啟或恆關閉
+  const pwpf = new Pwpf({ Km: 1.0, Tm: 0.8, Uon: 0.04, Uoff: 0.02 });
+  const dt = 0.005;
+  let onCount = 0, transitions = 0, prev = 0;
+  for (let i = 0; i < Math.round(60 / dt); i++) {
+    const s = pwpf.step(0.2, dt);
+    if (s === 1) onCount++;
+    if (s !== prev) transitions++;
+    prev = s;
+  }
+  assert.ok(onCount > 0, '應有點火');
+  assert.ok(onCount < Math.round(60 / dt), '不應鎖定恆開');
+  assert.ok(transitions > 10, `應有多次開關轉換（實得 ${transitions}）`);
+});
+
+test('T7i PWM 低占空比：步長減半不改變平均輸出', () => {
+  // 固定低占空比指令 → 殘差追蹤之平均輸出應與步長無關
+  const run = (dt) => {
+    const mod = new Modulator({ mode: 'pwm', pwmPeriod: 1.0, minPulse: 0.05 });
+    mod.setCapacity([1, 1, 1]);
+    let onTime = 0, total = Math.round(120 / dt);
+    for (let i = 0; i < total; i++) {
+      const st = mod.step([0.03, 0, 0], dt); // 3% 需求（低於最小可行占空比 5%）
+      if (st[0] !== 0) onTime += dt;
+    }
+    return onTime / 120; // 平均輸出（占空比）
+  };
+  const d1 = run(0.005), d2 = run(0.0025);
+  assert.ok(Math.abs(d1 - 0.03) < 0.02, `dt=0.005 平均輸出 ${d1} 應接近 0.03`);
+  assert.ok(Math.abs(d2 - 0.03) < 0.02, `dt=0.0025 平均輸出 ${d2} 應接近 0.03`);
+  assert.ok(Math.abs(d1 - d2) < 0.01, `步長無關性：${d1} vs ${d2}`);
+});
+
 test('T8a 全程在帶內 → 穩定時間 0', () => {
   const cfg = presetByName('medium');
   cfg.sim.settleBandDeg = 10; // 初始誤差 ~61° 仍可能在帶外

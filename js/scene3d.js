@@ -36,6 +36,31 @@ export class Scene3D {
     this.scene.add(this.rocketGroup);
     this.rocketGroup.add(this.bodyGroup, this.targetFrame, this.cgMarker, this.thrusterGroup);
     window.addEventListener('resize', () => this.resize());
+    this.raycaster = new THREE.Raycaster();
+    this.renderer.domElement.addEventListener('pointerdown', (e) => this.onPointerDown(e));
+    window.__scene3d = this; // 除錯／測試掛鉤
+  }
+
+  // 取得第 ti 具推力器在螢幕上的座標（測試／除錯用）
+  screenPosOfThruster(ti) {
+    const noz = this.nozzles.find((n) => n.userData.pickable && n.userData.ti === ti) || this.nozzles[ti];
+    if (!noz) return null;
+    const v = noz.getWorldPosition(new THREE.Vector3());
+    const p = v.clone().project(this.camera);
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return { x: rect.left + ((p.x + 1) / 2) * rect.width, y: rect.top + ((1 - p.y) / 2) * rect.height };
+  }
+
+  // 點選推力器噴嘴 → 選取並通知 UI
+  onPointerDown(e) {
+    if (e.button !== 0) return;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.camera);
+    const hits = this.raycaster.intersectObjects(this.nozzles ?? [], false)
+      .filter((h) => h.object.userData.enabled !== false);
+    if (hits.length) this.selectThruster(hits[0].object.userData.ti);
   }
 
   buildLights() {
@@ -68,23 +93,62 @@ export class Scene3D {
     const L = cfg.vehicle.length, R = cfg.vehicle.radius;
     this.bodyGroup = new THREE.Group();
 
-    // 箭身（X 軸 = 縱軸）
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xd8dde8, roughness: 0.55, metalness: 0.35 });
-    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(R, R, L * 0.8, 48), bodyMat);
-    cyl.rotation.z = -Math.PI / 2;
-    cyl.position.x = -L * 0.1;
-    this.bodyGroup.add(cyl);
+    // ---- 箭體外形：尾裙 + 筒身 + 切線尖拱鼻錐（Lathe 旋轉成型，X 軸 = 縱軸）----
+    const noseLen = L * 0.2;
+    const bodyEnd = L / 2 - noseLen;
+    const profile = [];
+    // 尾裙（底部略寬，引擎段）
+    profile.push(new THREE.Vector2(R * 1.14, -L / 2));
+    profile.push(new THREE.Vector2(R * 1.14, -L / 2 + L * 0.05));
+    profile.push(new THREE.Vector2(R, -L / 2 + L * 0.07));
+    // 筒身
+    profile.push(new THREE.Vector2(R, bodyEnd));
+    // 鼻錐：修正橢圓剖面 r = R(1−u²)^0.7
+    //   u=0 處斜率為 0（與筒身相切、無階差），指數 0.7 > 0.5 使尖端更銳利
+    const nosePts = 26;
+    for (let i = 1; i <= nosePts; i++) {
+      const u = i / nosePts;
+      profile.push(new THREE.Vector2(R * Math.pow(1 - u * u, 0.7), bodyEnd + u * noseLen));
+    }
+    profile.push(new THREE.Vector2(R * 0.02, L / 2)); // 鈍化尖端（避免退化三角形）
+    const lathe = new THREE.Mesh(
+      new THREE.LatheGeometry(profile, 64),
+      new THREE.MeshStandardMaterial({ color: 0xe8edf6, roughness: 0.32, metalness: 0.55 }),
+    );
+    lathe.rotation.z = -Math.PI / 2; // Y 軸旋轉成型 → X 軸縱軸（+X = 鼻錐）
+    this.bodyGroup.add(lathe);
 
-    // 鼻錐
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(R, L * 0.2, 48), new THREE.MeshStandardMaterial({ color: 0xb9c2d4, roughness: 0.4, metalness: 0.5 }));
-    nose.rotation.z = -Math.PI / 2;
-    nose.position.x = L * 0.4;
-    this.bodyGroup.add(nose);
+    // 鼻錐段（深色金屬漆面，貼合剖面 r=R(1−u²)^0.7）
+    const rAt = (u) => R * Math.pow(1 - u * u, 0.7);
+    const noseShell = new THREE.Mesh(
+      new THREE.CylinderGeometry(rAt(0.8), rAt(0.3), noseLen * 0.5, 48, 1, true),
+      new THREE.MeshStandardMaterial({ color: 0x2f3a52, roughness: 0.25, metalness: 0.75 }),
+    );
+    noseShell.rotation.z = -Math.PI / 2;
+    noseShell.position.x = bodyEnd + noseLen * 0.55;
+    this.bodyGroup.add(noseShell);
+    // 鼻錐底環（青色分隔）
+    const noseRing = new THREE.Mesh(
+      new THREE.TorusGeometry(R * 1.005, R * 0.025, 10, 64),
+      new THREE.MeshStandardMaterial({ color: 0x4fd8e0, roughness: 0.3, metalness: 0.5 }),
+    );
+    noseRing.rotation.y = Math.PI / 2;
+    noseRing.position.x = bodyEnd;
+    this.bodyGroup.add(noseRing);
 
-    // 環帶（視覺參考）
-    for (const fx of [-L * 0.3, 0, L * 0.3]) {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(R * 1.005, R * 0.02, 8, 64),
-        new THREE.MeshStandardMaterial({ color: 0x39445c, roughness: 0.8 }));
+    // 尾裙色環
+    const skirtBand = new THREE.Mesh(
+      new THREE.CylinderGeometry(R * 1.125, R * 1.125, L * 0.05, 48, 1, true),
+      new THREE.MeshStandardMaterial({ color: 0x232b3d, roughness: 0.45, metalness: 0.65 }),
+    );
+    skirtBand.rotation.z = -Math.PI / 2;
+    skirtBand.position.x = -L / 2 + L * 0.025;
+    this.bodyGroup.add(skirtBand);
+
+    // 筒身分隔環線（面板接縫感）
+    for (const fx of [-L * 0.32, -L * 0.2, -L * 0.08, L * 0.04, L * 0.16]) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(R * 1.003, R * 0.008, 6, 64),
+        new THREE.MeshStandardMaterial({ color: 0x9aa6bb, roughness: 0.5, metalness: 0.6 }));
       ring.rotation.y = Math.PI / 2;
       ring.position.x = fx;
       this.bodyGroup.add(ring);
@@ -92,7 +156,6 @@ export class Scene3D {
 
     // 本體軸
     const axisLen = L * 0.75;
-    const labels = ['X', 'Y', 'Z'];
     for (let a = 0; a < 3; a++) {
       const dir = [0, 0, 0]; dir[a] = 1;
       const g = new THREE.BufferGeometry().setFromPoints([
@@ -101,7 +164,29 @@ export class Scene3D {
       ]);
       const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: AXIS_COLORS[a] }));
       this.bodyGroup.add(line);
+      // 軸標籤（文字貼圖 sprite）
+      const label = makeTextSprite(['X（鼻錐方向）', 'Y', 'Z'][a], ['#ff8f8f', '#4fd8e0', '#b28fff'][a]);
+      const lp = V.scale(dir, axisLen * 1.3);
+      label.position.set(lp[0], lp[1], lp[2]);
+      this.bodyGroup.add(label);
     }
+
+    // +X 大箭頭（縱軸方向指示，穿出鼻錐）
+    const arrow = new THREE.Group();
+    const shaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(R * 0.03, R * 0.03, L * 0.3, 10),
+      new THREE.MeshBasicMaterial({ color: 0xff8f8f, transparent: true, opacity: 0.9 }),
+    );
+    shaft.rotation.z = -Math.PI / 2;
+    const head = new THREE.Mesh(
+      new THREE.ConeGeometry(R * 0.09, L * 0.09, 12),
+      new THREE.MeshBasicMaterial({ color: 0xff8f8f, transparent: true, opacity: 0.9 }),
+    );
+    head.rotation.z = -Math.PI / 2;
+    head.position.x = L * 0.19;
+    arrow.add(shaft, head);
+    arrow.position.x = L / 2 + L * 0.06;
+    this.bodyGroup.add(arrow);
 
     // 質心標記
     const cg = cfg.vehicle.cg;
@@ -112,8 +197,9 @@ export class Scene3D {
     // 推力器 + 排焰
     this.thrusterGroup = new THREE.Group();
     this.flames = [];
-    this.nozzleDirs = [];
-    cfg.rcs.thrusters.forEach((t) => {
+    this.nozzles = [];
+    this.thrustArrows = [];
+    cfg.rcs.thrusters.forEach((t, ti) => {
       const pos = t.pos, dir = t.dir;
       // 噴嘴（小圓柱，指向 dir）
       const noz = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.045, R * 0.03, R * 0.09, 12),
@@ -121,7 +207,38 @@ export class Scene3D {
       const q = quaternionFromX(dir);
       noz.quaternion.copy(q);
       noz.position.set(pos[0] - dir[0] * R * 0.045, pos[1] - dir[1] * R * 0.045, pos[2] - dir[2] * R * 0.045);
+      noz.userData.ti = ti;
+      noz.userData.dir = dir.slice();
+      noz.userData.enabled = t.enabled !== false;
+      noz.visible = t.enabled !== false; // 停用 → 3D 隱藏
+      // 推力方向箭頭（作用於箭體的力方向；常駐顯示）
+      const arrow = new THREE.ArrowHelper(
+        new THREE.Vector3(dir[0], dir[1], dir[2]),
+        new THREE.Vector3(pos[0], pos[1], pos[2]),
+        R * 0.55, 0xffa94d, R * 0.18, R * 0.1);
+      arrow.line.material.linewidth = 2;
+      arrow.visible = t.enabled !== false; // 停用 → 箭頭隨噴嘴隱藏
+      this.thrusterGroup.add(arrow);
+      this.thrustArrows.push(arrow);
+      // 透明選取球（加大點擊範圍；停用時隨噴嘴隱藏）
+      const pick = new THREE.Mesh(
+        new THREE.SphereGeometry(R * 0.16, 12, 8),
+        new THREE.MeshBasicMaterial({ visible: false }));
+      pick.position.set(pos[0], pos[1], pos[2]);
+      pick.userData.ti = ti;
+      pick.userData.pickable = true;
+      pick.userData.enabled = t.enabled !== false;
+      pick.visible = t.enabled !== false;
+      this.thrusterGroup.add(pick);
+      this.nozzles.push(pick);
       this.thrusterGroup.add(noz);
+      this.nozzles.push(noz);
+      // 選取指示環（選中時顯示）
+      const sel = new THREE.Mesh(new THREE.TorusGeometry(R * 0.16, R * 0.035, 10, 40),
+        new THREE.MeshBasicMaterial({ color: 0xffd166 }));
+      sel.visible = false;
+      this.thrusterGroup.add(sel);
+      noz.userData.selRing = sel;
       // 排焰（圓錐，沿 −dir）
       const flame = new THREE.Mesh(new THREE.ConeGeometry(R * 0.07, R * 0.5, 12),
         new THREE.MeshBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0.95 }));
@@ -131,6 +248,42 @@ export class Scene3D {
       flame.visible = false;
       this.thrusterGroup.add(flame);
       this.flames.push(flame);
+    });
+    this.applyThrusterSelection();
+  }
+
+  // 由 UI 卡片點選時僅更新 3D 高亮（不回呼，避免循環）
+  setThrusterSelection(ti) {
+    this.selectedTi = ti;
+    this.groupHighlight = null;
+    this.applyThrusterSelection();
+  }
+
+  // 選取推力器（3D 點選 → 高亮並通知 UI）
+  selectThruster(ti) {
+    this.selectedTi = ti;
+    this.groupHighlight = null; // 單選時清除分組高亮
+    this.applyThrusterSelection();
+    if (this.onSelectThruster) this.onSelectThruster(ti);
+  }
+  // 分組高亮（UI 群組按鈕 → 3D 多具高亮）
+  setGroupHighlight(indices) {
+    this.groupHighlight = indices;
+    this.selectedTi = null;
+    this.applyThrusterSelection();
+  }
+  applyThrusterSelection() {
+    const inGroup = (ti) => this.groupHighlight?.includes(ti) ?? false;
+    (this.nozzles ?? []).forEach((noz) => {
+      if (!noz.userData.selRing) return; // 選取球僅供點擊，無指示環
+      const ti = noz.userData.ti; // 以推力器編號對照（陣列含選取球，不可用陣列索引）
+      const on = (ti === this.selectedTi || inGroup(ti)) && noz.userData.enabled !== false;
+      noz.userData.selRing.visible = on;
+      if (on) {
+        noz.userData.selRing.position.copy(noz.position);
+        noz.userData.selRing.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(
+          new THREE.Vector3(0, 0, 1), new THREE.Vector3(...noz.userData.dir)));
+      }
     });
   }
 
@@ -253,6 +406,22 @@ export class Scene3D {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
   }
+}
+
+// 文字貼圖 sprite（軸標籤用）
+function makeTextSprite(text, color) {
+  const cvs = document.createElement('canvas');
+  const fs = 42;
+  cvs.width = 256; cvs.height = 64;
+  const ctx = cvs.getContext('2d');
+  ctx.font = `bold ${fs}px "Noto Sans TC", sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  ctx.fillText(text, 128, 32);
+  const tex = new THREE.CanvasTexture(cvs);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  sprite.scale.set(1.4, 0.35, 1);
+  return sprite;
 }
 
 // 由 +X 方向向 dir 的旋轉四元數

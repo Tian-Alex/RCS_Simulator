@@ -282,9 +282,112 @@ K_p=\sqrt{q_\theta/r},\qquad K_d=\sqrt{q_\omega/r+2J\sqrt{q_\theta/r}}
 
 執行：`node test/runTests.mjs`
 
+
 ## §12 已知近似（明確標註之範圍邊界）
 
 - 單一剛體（無撓性、無推進劑晃動）；質量減少時質心與慣量不變（推進劑集中於質心之近似）。
 - 常數推力／常數 \(I_{sp}\) 冷氣近似（非壓力吹降模型）。
 - 重力梯度採給定圓軌道（不與平移耦合）；SRP 常數面積、無蝕。
 - 6-DOF 完整傳播平移，但不含位置控制迴路。
+
+## §13 理論推導補充
+
+本節補充 §1–§7 各模型的推導細節，供需要深入理解的讀者查閱。
+
+### E13.1 四元數運動學的由來
+
+剛體姿態以旋轉矩陣 \(R\)（body→inertial）表示、角速度 \(\boldsymbol{\omega}\) 以本體系表示時，其時間微分為（見 Sola 2017, §2）：
+
+\[
+\dot R = R\,[\boldsymbol{\omega}]_\times
+\]
+
+其中 \([\boldsymbol{\omega}]_\times\) 為角速度的反對稱矩陣（右乘 = 本體系角速度）。將 \(R\) 以四元數 \(q=(w,\boldsymbol{v})\) 表示並代入上式，整理可得等效的一階 ODE：
+
+\[
+\dot q = \tfrac{1}{2}\,q\otimes\begin{bmatrix}0\\ \boldsymbol{\omega}\end{bmatrix}
+= \tfrac{1}{2}\begin{bmatrix} -\boldsymbol{v}\cdot\boldsymbol{\omega} \\\ w\,\boldsymbol{\omega} + \boldsymbol{v}\times\boldsymbol{\omega}\end{bmatrix}
+\]
+
+本模擬以 RK4 積分後每步正規化（\(\|q\|=1\)），抑制數值漂移。
+
+**為何不用 Euler 角？** 3-2-1 Euler 角在 pitch = ±90° 存在萬向鎖（gimbal lock）奇異：兩個自由度退化為同一軸，角速度到角變率的轉換矩陣（\(T(\phi,\theta)\)）行列式為零。四元數是 \(SO(3)\) 的雙重覆蓋，全域非奇異。**雙重覆蓋**：\(q\) 與 \(-q\) 對應同一物理旋轉，故誤差處理時取 \(\operatorname{sign}(q_{e,w})\) 將旋轉限制在 ≤180° 的最短路徑（避免「繞遠路」的反向轉動）。
+
+### E13.2 Newton–Euler 方程的推導
+
+慣性系角動量 \(\mathbf{H}_I = m\,\mathbf{r}\times\dot{\mathbf{r}} + \int \boldsymbol{\rho}\times\dot{\boldsymbol{\rho}}\,dm\)，其中剛體內部項在本體系可寫成 \(\mathbf{h}_B = J\boldsymbol{\omega}\)。由 \(\mathbf{H}_I\) 守恆（無外力矩時）與 \(\dot{\mathbf{h}}_B + \boldsymbol{\omega}\times\mathbf{h}_B = \boldsymbol{\tau}_B\)（Sola 2017, §3；Wertz 1978, §16）可得本體系 Euler 方程：
+
+\[
+J\dot{\boldsymbol{\omega}} = \boldsymbol{\tau}_B - \boldsymbol{\omega}\times(J\boldsymbol{\omega})
+\]
+
+其中 \(\boldsymbol{\omega}\times(J\boldsymbol{\omega})\) 為**陀螺耦合項**：即使無外力矩，角速度與慣量軸不對齊時也會產生進動；自由剛體繞最大或最小慣量主軸的旋轉是穩定的，繞中間慣量主軸則不穩定（中間軸定理／網球拍定理）。慣量張量
+
+\[
+J = \begin{bmatrix} I_{xx} & -P_{xy} & -P_{xz} \\ -P_{xy} & I_{yy} & -P_{yz} \\ -P_{xz} & -P_{yz} & I_{zz} \end{bmatrix},\qquad
+I_{xx}=\int(y^2+z^2)\,dm,\quad P_{xy}=\int xy\,dm
+\]
+
+使用者輸入正號慣性積 \(P\)，張量自動取負（§1）。模擬的 T2/T10b 測試驗證無外力時 \(\mathbf{H}_I\) 與動能守恆，即此耦合項正確。
+
+### E13.3 PWPF 調變器的遲滯分析
+
+PWPF 由一階低通濾波器 + Schmitt trigger（遲滯比較器）組成（Kuwao et al. 2007；Habineh 2009 見 §5 出處）：
+
+1. **符號–量值分離**：指令符號單獨處理（僅在點火關閉時可更新方向，避免方向顫動），量值 \(|u|\)（截於 1.5）進入濾波器。
+2. **一階低通濾波（含輸出回授，標準 PWPF 拓撲）**：\(\dot u_f = (K_m(|u| - s) - u_f)/T_m\)，其中 \(s \in \{0, 1\}\) 為目前點火狀態——點火時回授使 \(u_f\) 反向衰減至 \(U_{off}\) 而關閉；關閉時 \(u_f\) 朝 \(K_m|u|\) 回升至 \(U_{on}\) 而再點火，形成自然脈衝序列。
+3. **一側遲滯繼電器**（Schmitt trigger）：\(u_f \ge U_{on} \Rightarrow s=1\)；\(u_f \le U_{off} \Rightarrow s=0\)；介於其間維持原狀態（遲滯帶）。
+
+**脈衝寬度與週期**（可解析估計）：開啟期間 \(u_f\) 以時間常數 \(T_m\) 衰減至穩態 \(K_m(|u|-1)\)，故脈衝寬度 \(\approx T_m\ln\frac{1-|u|+U_{on}/K_m}{1-|u|+U_{off}/K_m}\)；關閉期間回升至穩態 \(K_m|u|\)，關閉時間 \(\approx T_m\ln\frac{|u|-U_{off}/K_m}{|u|-U_{on}/K_m}\)。由此可見：\(|u| \to U_{on}/K_m\) 時關閉時間發散（脈衝頻率趨零，形成死區邊界）；遲滯帶越寬，頻率越低。調參方向：增大 \(T_m\) 或遲滯帶 → 開關次數下降（省推進劑、閥門壽命長）但響應變慢；減小則反之。此為「控制精度 ↔ 推進劑/閥門壽命」的基本取捨。
+
+**PWM 殘差追蹤**（`modulation.js` 實作）：固定週期 \(T_{pwm}\)、占空比 \(=|u|\)（截於 1）；當需求 on-time \(|u|T_{pwm}\) 低於最小脈衝寬度 \(t_{min}\) 時，以時間為單位累積需求（\(|u|\,dt\)，與物理步長無關），累積至 \(\ge t_{min}\) 時以倒數計時器交付完整累積需求（pulse skipping），消除小指令死區且平均輸出 \(=|u|\)。
+
+### E13.4 LQR 與 Newton–Kleinman 疊代
+
+線性化（`lqr.js` `linearize()`）：狀態 \(x=[\boldsymbol{\varepsilon};\ \boldsymbol{\omega}]\)，其中 \(\boldsymbol{\varepsilon}=-\boldsymbol{\delta}\) 為**偏離目標**的誤差旋轉向量（\(\boldsymbol{\delta}\) 為前往目標的旋轉，見 E2.3），\(\dot{\boldsymbol{\varepsilon}}=\boldsymbol{\omega}\)，\(J\dot{\boldsymbol{\omega}}=\boldsymbol{\tau}\)：
+
+\[
+\dot x = Ax + Bu,\qquad
+A=\begin{bmatrix}0&I\\0&0\end{bmatrix},\qquad
+B=\begin{bmatrix}0\\J^{-1}\end{bmatrix},\qquad u=-Kx
+\]
+
+閉迴路（對角慣量時逐軸）：\(J s^2 + K_d s + K_p = 0\)，\(K_p, K_d > 0\) 穩定。控制律 \(\tau = -Kx = K_p\boldsymbol{\delta} - K_d\boldsymbol{\omega}\)（施加力矩往 \(\boldsymbol{\delta}\) 方向轉、同時阻尼角速度）。
+
+最小化 \(\int (x^TQx + u^TRu)\,dt\) 的最佳回授 \(u=-Kx\) 由 CARE 決定：
+
+\[
+A^TP + PA - PBR^{-1}B^TP + Q = 0,\qquad K = R^{-1}B^TP
+\]
+
+**Newton–Kleinman 疊代**（Kleinman 1968）：給定穩定的初始回授 \(K_0\)（本模擬以 \(\nu=0.3\,\text{rad/s}\)、\(\zeta=0.9\) 的 PD 極點配置生成），重複解 Lyapunov 方程
+
+\[
+(A-BK_i)^TP_i + P_i(A-BK_i) + Q + K_i^TRK_i = 0,\qquad K_{i+1} = R^{-1}B^TP_i
+\]
+
+直到 \(\|K_{i+1}-K_i\|\) 收斂（殘差指標顯示於 LQR 狀態框）。**對角系統解析解**（驗證用，與 scipy `solve_continuous_are` 一致，含符號）：
+
+\[
+K_p = \sqrt{q_\theta/r},\qquad K_d = \sqrt{q_\omega/r + 2J\sqrt{q_\theta/r}}
+\]
+
+與 scipy `solve_continuous_are` 交叉驗證一致（見 verification-report.md）。
+
+### E13.5 重力梯度力矩的假設
+
+圓軌道上，箭體兩端所受重力略有差異，產生恢復力矩（Wertz 1978, §16；詳細推導見 Wie 2008, §8.5）：
+
+\[
+\boldsymbol{\tau}_{gg} = \frac{3\mu}{r^3}\,\hat{\mathbf{r}}\times(J\hat{\mathbf{r}})
+\]
+
+其中 \(\hat{\mathbf{r}}\) 為軌道向徑方向單位向量（以給定軌道高度與初始相位沿圓軌道運動）。本模擬採**給定軌道**（不受姿態影響回饋），屬近似（§12）；長軸對準地心方向為穩定平衡，且需被動或主動阻尼否則振盪。
+
+### E13.6 太陽輻射壓的假設
+
+\[
+\boldsymbol{\tau}_{srp} = \mathbf{r}_{cp}\times\left(P\,C_r A\,\hat{\mathbf{s}}\right)
+\]
+
+其中 \(P = 4.56\times10^{-6}\,\text{N/m}^2\)（1 AU 處動壓，Wertz 1978）、\(C_r\) 為反射係數、\(A\) 為有效受照面積、\(\mathbf{r}_{cp}\) 為壓力中心相對質心的偏移。採常數面積與瞬時反射（無自轉調變），見 §12 近似清單。

@@ -27,6 +27,7 @@ const btnRun = $('btn-run'), btnReset = $('btn-reset'), btnFF = $('btn-ff');
 const clock = $('sim-clock');
 const chartTabs = $('chart-tabs');
 const metricsBox = $('metrics-box'), lqrBox = $('lqr-box'), chartBox = $('chart-box');
+const helpBox = $('help-box'), phaseTools = $('phase-tools'), chartHost = document.querySelector('.chart-host');
 
 // ------------------- 初始化 -------------------
 function init() {
@@ -40,7 +41,10 @@ function init() {
       ui.build();
       rebuildSim();
     },
+    onSelectThruster: (ti) => scene3d.setThrusterSelection(ti), // 卡片點選 → 3D 高亮
+    onGroupHighlight: (indices) => scene3d.setGroupHighlight(indices ?? []), // 軸向分組 → 3D 多具高亮
   });
+  scene3d.onSelectThruster = (ti) => ui.setThrusterSelection(ti); // 3D 點選 → 卡片高亮
   plots.buildAll(sim, cfg.rcs.thrusters.map((t) => t.name));
   rebuildSim();
   wireControls();
@@ -92,12 +96,27 @@ function wireControls() {
     chartTabs.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
     tab.classList.add('active');
     const id = tab.dataset.tab;
+    const showChart = id !== 'metrics' && id !== 'help';
     plots.show(id);
     metricsBox.hidden = id !== 'metrics';
     lqrBox.hidden = id !== 'metrics' || cfg.controller.type !== 'lqr';
-    chartBox.style.display = id === 'metrics' ? 'none' : '';
-    if (id !== 'metrics') plots.refresh();
-    else updateMetrics();
+    helpBox.hidden = id !== 'help';
+    phaseTools.hidden = id !== 'phase';
+    chartBox.style.display = showChart ? '' : 'none';
+    if (id !== 'metrics' && id !== 'help') plots.refresh();
+    else if (id === 'metrics') updateMetrics();
+  });
+  // 相圖模式切換
+  phaseTools.querySelectorAll('.phase-mode').forEach((b) =>
+    b.addEventListener('click', () => {
+      phaseTools.querySelectorAll('.phase-mode').forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+      plots.setPhaseMode(b.dataset.phaseMode);
+    }));
+  // 全螢幕圖表
+  $('btn-fullscreen').addEventListener('click', () => chartHost.classList.toggle('fullscreen'));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') chartHost.classList.remove('fullscreen');
   });
   document.querySelectorAll('[data-preset]').forEach((b) =>
     b.addEventListener('click', () => ui.applyPreset(b.dataset.preset)));
@@ -171,11 +190,17 @@ function updateMetrics() {
     ['累計 Δv（RCS 淨力）', `${m.dvAccum.toFixed(4)} m/s`],
     ['Δv 向量 |v(t)−v(0)|', `${Math.hypot(...m.dvVector).toFixed(4)} m/s`],
     ['控制能量 ∫‖τ‖²dt', `${m.controlEffort.toFixed(1)} N²·m²·s`],
-    ['推力器循環次數', m.cycles.join(' / ')],
-    ['推力器累計點火 [s]', m.onTimes.map((x) => x.toFixed(1)).join(' / ')],
   ];
+  // 推力器統計：每具一列（表格排列，避免長字串換行重疊）
+  const G0 = 9.80665;
+  const tRows = sim.rcs.thrusters.map((t, i) => {
+    const mdot = (t.maxThrust * m.onTimes[i]) / (t.isp * G0);
+    return `<tr><td>${t.name}${t.enabled ? '' : '（停用）'}</td><td>${m.cycles[i]}</td><td>${m.onTimes[i].toFixed(1)}</td><td>${mdot.toFixed(4)}</td></tr>`;
+  }).join('');
   metricsBox.innerHTML = '<h3>效能指標（目前參數設定）</h3>' +
     `<table>${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')}</table>` +
+    `<h4 style="font-size:12px;margin:10px 0 2px;color:#8b96ad">各推力器統計</h4>` +
+    `<table class="mtable"><tr><th>推力器</th><th>循環次數</th><th>累計點火 [s]</th><th>推進劑 [kg]</th></tr>${tRows}</table>` +
     `<p style="font-size:11px;color:#5a6478;margin-top:8px">Δv 定義見 docs/equations.md §9：累計 RCS 淨加速度積分 ≠ |v(t)−v(0)|（純力偶消耗推進劑但不產生淨 Δv）</p>`;
 }
 

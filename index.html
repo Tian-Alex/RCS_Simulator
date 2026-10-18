@@ -83,14 +83,54 @@
           <button class="tab" data-tab="trans" role="tab">平移狀態</button>
           <button class="tab" data-tab="phase" role="tab">相圖</button>
           <button class="tab" data-tab="metrics" role="tab">效能指標</button>
+          <button class="tab" data-tab="help" role="tab">說明</button>
         </div>
         <div class="chart-host">
           <div id="chart-box" class="chart-box"></div>
           <div id="metrics-box" class="metrics-box" hidden></div>
           <div id="lqr-box" class="lqr-box" hidden></div>
+          <div id="help-box" class="help-box" hidden>
+            <h3>這是什麼？</h3>
+            <p>這是一個在瀏覽器中執行的<b>火箭姿態控制模擬器</b>。火箭在外太空中會因為擾動而翻滾，姿態控制系統的任務就是利用冷氣推進器（RCS）產生的力矩，把火箭轉到並維持在目標方向。完整方程式與出處見 <code>docs/equations.md</code>，新手教學見 <code>docs/getting-started.md</code>。</p>
+            <h3>快速入門（三分鐘）</h3>
+            <ol>
+              <li>按左側「<b>中型（預設）</b>」選擇參考案例。</li>
+              <li>按頂列「<b>開始</b>」即時播放，觀察 3D 火箭如何從翻滾收斂到目標姿態（半透明白色框架）。</li>
+              <li>按「<b>快轉完成</b>」直接算到底，再看下方圖表與「效能指標」分頁的穩定時間與推進劑消耗。</li>
+              <li>切換「控制器」面板的控制律（PID / LQR / Quaternion PD）與「調變器」模式（PWPF / PWM / 連續），比較收斂快慢與推進劑用量。</li>
+            </ol>
+            <h3>怎麼看圖表</h3>
+            <ul>
+              <li><b>姿態</b>：roll/pitch/yaw 隨時間變化，應收斂到目標角。</li>
+              <li><b>姿態誤差角</b>：總誤差越小越好；PWPF/PWM 模式會殘留小幅極限環（開關推力的固有現象）。</li>
+              <li><b>角速度</b>：應收斂到 0 附近。</li>
+              <li><b>RCS 開關歷程</b>：每具推力器的點火時機，愈密代表控制器愈忙。</li>
+              <li><b>相圖</b>：誤差角 vs 角速度的軌跡，收斂螺旋拉向原點代表穩定。</li>
+            </ul>
+            <p>所有 2D 圖表：<b>滾輪縮放、拖曳平移、雙擊重設</b>；游標移到線上會顯示對應時間點的數值。</p>
+            <h3>參數調整建議</h3>
+            <table>
+              <tr><th>想觀察…</th><th>調這裡</th></tr>
+              <tr><td>更快的收斂</td><td>控制器面板 → 增大 Kp（PID/QPD）或 Q（LQR）</td></tr>
+              <tr><td>抑制震盪</td><td>增大 Kd（PID/QPD）或 Q 的角速度項（LQR）</td></tr>
+              <tr><td>對抗常值擾動</td><td>增大 Ki（PID），或加大積分上限</td></tr>
+              <tr><td>推進劑消耗</td><td>調變器 → PWPF 門檻 Uon、或改用理想連續模式對照</td></tr>
+              <tr><td>真實閥門行為</td><td>推力器卡片 → 開關延遲、最小衝量、占空比</td></tr>
+            </table>
+            <h3>推力器怎麼設定？</h3>
+            <p>左側「RCS 推力器」面板改為卡片式：位置可用「<b>站位＋時鐘角＋半徑</b>」（時鐘角 0° = +Y、90° = +Z，站位沿縱軸，+X = 鼻錐方向）或直接改 xyz，兩邊自動同步；方向可按 ±X/±Y/±Z 快選或輸入向量。可新增／刪除推力器，在 3D 視圖點噴嘴可快速選取。</p>
+            <h3>座標系</h3>
+            <p>箭體縱軸為 <b>+X（鼻錐方向）</b>，Y/Z 為橫向軸；3D 視圖中的紅色箭頭與「X（鼻錐方向）」標籤即縱軸。姿態顯示為 roll–pitch–yaw（3-2-1 Euler 角）。</p>
+          </div>
+          <div id="phase-tools" class="phase-tools" hidden>
+            <button class="btn btn-small phase-mode active" data-phase-mode="axes">三軸軌跡</button>
+            <button class="btn btn-small phase-mode" data-phase-mode="total">總量（|δ| vs |ω|）</button>
+            <span class="hint">滾輪縮放 · 拖曳平移 · 雙擊重設</span>
+          </div>
         </div>
         <div class="charts-actions">
           <button id="btn-csv" class="btn btn-small" data-testid="button-csv">匯出 CSV</button>
+          <button id="btn-fullscreen" class="btn btn-small" data-testid="button-fullscreen">全螢幕圖表</button>
           <span class="hint">圖表於模擬進行中即時更新；資料取樣間隔 = 記錄間隔（預設 0.05 s）</span>
         </div>
       </div>
@@ -98,6 +138,8 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
   <script type="importmap">
   {
     "imports": {

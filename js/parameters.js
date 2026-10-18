@@ -56,14 +56,14 @@ function baseConfig() {
     controller: {
       type: 'pid',
       params: {
-        gains: [[76, 915, 0.1], [76, 915, 0.1], [76, 915, 0.1]], // [Kp, Kd, Ki] per axis（Ti = Kp/Ki ≈ 760 s）
-        intLimit: [5, 5, 5],
+        gains: [[600, 2570, 16], [600, 2570, 16], [600, 2570, 16]], // [Kp, Kd, Ki] per axis（ζ≈0.9）
+        intLimit: [15, 15, 15],
       },
     },
     modulator: {
       mode: 'pwpf',
       pwmPeriod: 1.0,
-      pwpf: { Km: 2.0, Tm: 0.15, Uon: 0.05, Uoff: 0.025 },
+      pwpf: { Km: 1.0, Tm: 0.8, Uon: 0.04, Uoff: 0.02 },
     },
     allocation: { wForce: 0.1 },
     disturbances: {
@@ -94,8 +94,8 @@ export function presetByName(name) {
       Ixx: 1.2, Iyy: 3.8, Izz: 3.8,
     });
     cfg.rcs.thrusters = makeThrusterSet(0.8, 0.2, 1, 0.01, 65, 0.008, 0.005, 0.9);
-    cfg.controller.params.gains = [[0.09, 1.05, 0.01], [0.09, 1.05, 0.01], [0.09, 1.05, 0.01]];
-    cfg.controller.params.intLimit = [10, 10, 10]; // 依小容量縮放（Ki·intLimit ≈ 0.1 N·m）
+    cfg.controller.params.gains = [[3, 6.1, 0.08], [3, 6.1, 0.08], [3, 6.1, 0.08]];
+    cfg.controller.params.intLimit = [2, 2, 2]; // Ki·intLimit ≈ 0.16 N·m（容量級）
     // 註：PWPF 閾值為軸容量百分比（調變器輸入已正規化），毋須隨案例縮放
     Object.assign(cfg.disturbances, {
       constantTorque: [0.005, -0.002, 0.001],
@@ -109,12 +109,14 @@ export function presetByName(name) {
       Ixx: 27075, Iyy: 193500, Izz: 193500,
     });
     cfg.rcs.thrusters = makeThrusterSet(12, 1.9, 150, 0.75, 65, 0.02, 0.015, 0.8);
-    cfg.controller.params.gains = [[610, 7370, 40], [4300, 52000, 300], [4300, 52000, 300]];
+    cfg.controller.params.gains = [[11280, 48300, 300], [34200, 146500, 912], [34200, 146500, 912]];
+    cfg.controller.params.intLimit = [2000, 2000, 2000];
     cfg.sim.duration = 200;
   } else {
     // medium（預設）
     cfg.rcs.thrusters = makeThrusterSet(4, 1.2, 10, 0.05, 65, 0.015, 0.01, 0.9);
   }
+  cfg.presetName = name; // 供 UI 切換控制器時選用案例尺度之預設增益
   return cfg;
 }
 

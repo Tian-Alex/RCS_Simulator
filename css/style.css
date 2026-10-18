@@ -219,3 +219,113 @@ a { color: var(--accent); }
   /* 單欄版面下側欄不黏頂，避免內容捲動時穿過側欄造成重疊 */
   .sidebar { position: static; max-height: none; }
 }
+
+/* ---------------- 參數提示（tooltip） ---------------- */
+.field { position: relative; }
+.field > label[data-tip] { cursor: help; border-bottom: 1px dotted var(--text-faint); }
+.field > label[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute; left: 0; top: calc(100% + 4px); z-index: 50;
+  width: max-content; max-width: 300px;
+  background: var(--surface-3); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 9px; font-size: 11.5px; line-height: 1.5; font-weight: 400;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+/* ---------------- 推力器卡片 ---------------- */
+.thruster-cards { display: flex; flex-direction: column; gap: 8px; }
+.thruster-card {
+  border: 1px solid var(--divider); border-radius: var(--radius);
+  background: var(--surface-2); padding: 8px 10px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.thruster-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 12px color-mix(in oklab, var(--accent) 25%, transparent);
+}
+.thruster-card.disabled { opacity: 0.55; }
+.thruster-card-head {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+}
+.thruster-card-head .tname { font-weight: 700; font-size: 13px; flex: 1; }
+.thruster-card-head .tname input {
+  background: transparent; border: 1px solid transparent; border-radius: 4px;
+  color: var(--text); font-weight: 700; font-size: 13px; padding: 2px 4px; width: 84px;
+}
+.thruster-card-head .tname input:hover, .thruster-card-head .tname input:focus {
+  border-color: var(--border); background: var(--surface-3); outline: none;
+}
+.thruster-card .sub {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center;
+  font-size: 11px; color: var(--text-muted);
+}
+.thruster-card .sub label { color: var(--text-faint); }
+.thruster-card .sub input[type="number"] {
+  width: 58px; padding: 3px 5px; font-size: 11.5px;
+}
+.thruster-card .sub input.posx { width: 64px; }
+.dirbtn {
+  padding: 2px 7px; font-size: 11px; border-radius: 4px; cursor: pointer;
+  background: var(--surface-3); border: 1px solid var(--border); color: var(--text-muted);
+}
+.dirbtn.active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.thruster-del {
+  background: none; border: none; color: var(--text-faint); cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 2px 6px; border-radius: 4px;
+}
+.thruster-del:hover { color: var(--err); background: color-mix(in oklab, var(--err) 12%, transparent); }
+.thruster-add {
+  width: 100%; padding: 7px; border-radius: var(--radius); cursor: pointer;
+  background: var(--surface-2); border: 1px dashed var(--border); color: var(--text-muted);
+  font-size: 12.5px;
+}
+.thruster-add:hover { border-color: var(--accent); color: var(--accent); }
+.station-note { font-size: 11px; color: var(--text-faint); margin-top: 3px; }
+
+/* ---------------- 相圖工具列 ---------------- */
+.phase-tools {
+  position: absolute; top: 6px; right: 10px; z-index: 10;
+  display: flex; align-items: center; gap: 6px;
+}
+.phase-tools .hint { font-size: 10.5px; color: var(--text-faint); }
+.phase-tools .btn-small.active { border-color: var(--accent); color: var(--accent); }
+
+/* ---------------- 說明頁 ---------------- */
+.help-box { position: absolute; inset: 0; overflow-y: auto; padding: 14px 18px 42px; }
+.help-box h3 { font-size: 14px; margin: 14px 0 8px; color: var(--accent); }
+.help-box h3:first-child { margin-top: 2px; }
+.help-box p, .help-box li { font-size: 12.5px; line-height: 1.75; color: var(--text); }
+.help-box ol, .help-box ul { padding-left: 20px; margin: 4px 0; }
+.help-box code {
+  background: var(--surface-3); border-radius: 4px; padding: 1px 5px;
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--accent);
+}
+.help-box .kbd {
+  display: inline-block; border: 1px solid var(--border); border-radius: 4px;
+  padding: 0 6px; font-size: 11px; color: var(--text-muted); background: var(--surface-3);
+}
+.help-box table { border-collapse: collapse; margin: 6px 0; font-size: 11.5px; }
+.help-box th, .help-box td { border: 1px solid var(--divider); padding: 4px 9px; text-align: left; }
+.help-box th { color: var(--text-muted); font-weight: 600; }
+
+/* ---------------- 效能指標：推力器統計表 ---------------- */
+.metrics-box table.mtable { border-collapse: collapse; margin: 8px 0 4px; font-size: 11.5px; }
+.metrics-box table.mtable th, .metrics-box table.mtable td {
+  border: 1px solid var(--divider); padding: 3px 8px; text-align: right; white-space: nowrap;
+}
+.metrics-box table.mtable th { color: var(--text-muted); font-weight: 600; text-align: center; }
+.metrics-box table.mtable td:first-child, .metrics-box table.mtable th:first-child { text-align: left; }
+
+/* ---------------- 全螢幕圖表 ---------------- */
+.chart-host.fullscreen {
+  position: fixed; inset: 0; z-index: 200; height: 100vh;
+  background: var(--bg); padding: 54px 12px 12px; border-radius: 0;
+}
+.chart-host.fullscreen .chart-box { max-height: calc(100vh - 70px); }
+.chart-host.fullscreen::before {
+  content: '全螢幕模式 — 點「全螢幕圖表」或按 Esc 離開';
+  position: absolute; top: 12px; left: 16px; z-index: 5;
+  font-size: 12px; color: var(--text-muted);
+}

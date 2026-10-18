@@ -11,7 +11,7 @@ export class PidController {
     // 每軸增益：[[Kp_x, Kd_x, Ki_x], ...]
     this.gains = params.gains.map((g) => [g[0], g[1], g[2]]);
     this.intLimit = params.intLimit ?? [5, 5, 5]; // 積分飽和上限 [N·m·s]
-    this.intWindow = params.intWindow ?? 0.1;      // 條件積分視窗 [rad]（約 5.7°）
+    this.intWindow = params.intWindow ?? 0.25;     // 條件積分視窗 [rad]（約 14°）
     this.reset();
   }
   reset() {

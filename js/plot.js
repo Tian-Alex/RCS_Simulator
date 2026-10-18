@@ -1,25 +1,49 @@
 // =====================================================================
-// plot.js — Chart.js 時間序列圖表管理
-// 圖表清單見 index.html 分頁；資料來源 = Simulation.record（記錄間隔取樣）
+// plot.js — Chart.js 圖表管理
+//   ・時間序列圖：滾輪縮放、拖曳平移、雙擊重設、游標懸停顯示數值
+//   ・相圖：三軸軌跡（連線）／總量（|δ| vs |ω|）兩種模式
 // =====================================================================
 import { Q } from './mathUtils.js';
 
 const AXIS_COLORS = ['#ff6b6b', '#4fd8e0', '#b28cff']; // X/Y/Z
 const DEG = 180 / Math.PI;
 
-function baseOpts(legend = true) {
+// 註冊縮放外掛（CDN 載入，全域名 ChartZoom）
+if (window.ChartZoom) Chart.register(window.ChartZoom);
+
+const fmt = (v) => (Math.abs(v) >= 100 ? v.toFixed(1) : Math.abs(v) >= 1 ? v.toFixed(3) : v.toFixed(4));
+
+function baseOpts(legend = true, xy = false) {
   return {
     responsive: true,
     maintainAspectRatio: false,
     animation: false,
     pointRadius: 0,
     borderWidth: 1.4,
+    interaction: { mode: xy ? 'nearest' : 'index', intersect: false },
     legend: legend ? { display: true, labels: { color: '#8b96ad', font: { size: 10 } } } : { display: false },
     scales: {
       x: { type: 'linear', ticks: { color: '#5a6478', font: { size: 10 }, maxTicksLimit: 10 }, grid: { color: '#1d2438' }, title: { display: true, text: 't [s]', color: '#5a6478', font: { size: 10 } } },
       y: { ticks: { color: '#8b96ad', font: { size: 10 } }, grid: { color: '#1d2438' } },
     },
-    plugins: { tooltip: { enabled: false } },
+    plugins: {
+      tooltip: {
+        enabled: true,
+        backgroundColor: 'rgba(13,18,32,0.95)', borderColor: '#2a3350', borderWidth: 1,
+        titleColor: '#dfe6f2', bodyColor: '#aeb9cd', padding: 8, cornerRadius: 6,
+        callbacks: {
+          title: (items) => xy
+            ? `δ = ${items[0].parsed.x.toFixed(3)}° / ω = ${items[0].parsed.y.toFixed(3)}°/s`
+            : `t = ${items[0].parsed.x.toFixed(3)} s`,
+          label: (it) => ` ${it.dataset.label}: ${fmt(it.parsed.y)}`,
+        },
+      },
+      zoom: {
+        zoom: { wheel: { enabled: true }, pinch: { enabled: true }, drag: { enabled: false }, mode: xy ? 'xy' : 'x' },
+        pan: { enabled: true, mode: xy ? 'xy' : 'x' },
+        limits: { x: { min: 'original', max: 'original' }, y: xy ? { min: 'original', max: 'original' } : undefined },
+      },
+    },
   };
 }
 
@@ -33,6 +57,7 @@ export class PlotManager {
     this.charts = {};
     this.currentTab = 'attitude';
     this.lastIdx = {};
+    this.phaseMode = 'axes'; // 'axes'（三軸軌跡）| 'total'（總量）
   }
 
   buildAll(sim, thrusterNames) {
@@ -107,18 +132,41 @@ export class PlotManager {
       ],
     }, { y: { title: { display: true, text: 'm/s, m', color: '#5a6478' } } });
 
-    // ---- 相圖（誤差角 vs 角速度，每軸）----
-    this.charts.phase = this.mkChart('phase', {
-      datasets: ['x (roll)', 'y (pitch)', 'z (yaw)'].map((n, a) => ({
-        label: n, data: [], borderColor: AXIS_COLORS[a], backgroundColor: AXIS_COLORS[a],
-        showLine: false, pointRadius: 1.1,
-      })),
-    }, {
-      x: { title: { display: true, text: '誤差角 δ [deg]', color: '#5a6478' }, ticks: { color: '#5a6478', font: { size: 10 } }, grid: { color: '#1d2438' } },
-      y: { title: { display: true, text: '角速度 ω [deg/s]', color: '#5a6478' } },
-    });
+    // ---- 相圖（誤差角 vs 角速度；模式見 setPhaseMode）----
+    this.charts.phase = this.mkChart('phase', this.phaseData(), {
+      x: { type: 'linear', title: { display: true, text: this.phaseMode === 'axes' ? '各軸誤差角 δ [deg]' : '總誤差角 |δ| [deg]', color: '#5a6478' }, ticks: { color: '#5a6478', font: { size: 10 } }, grid: { color: '#1d2438' } },
+      y: { title: { display: true, text: this.phaseMode === 'axes' ? '各軸角速度 ω [deg/s]' : '總角速度 |ω| [deg/s]', color: '#5a6478' } },
+    }, true);
 
     this.show(this.currentTab);
+  }
+
+  // 相圖資料（依模式由完整紀錄重建）
+  phaseData() {
+    const R = this.sim.record;
+    const pts = (fn) => { const out = []; for (let i = 0; i < R.t.length; i++) out.push(fn(i)); return out; };
+    if (this.phaseMode === 'total') {
+      return { datasets: [mkDataset('|δ| vs |ω|', '#f0b25f', pts((i) => ({
+        x: R.attErr[i] * DEG, y: Math.hypot(...R.w[i]) * DEG,
+      })), { borderWidth: 1.6 })] };
+    }
+    return { datasets: ['x (roll)', 'y (pitch)', 'z (yaw)'].map((n, a) =>
+      mkDataset(n, AXIS_COLORS[a], pts((i) => ({
+        x: R.attErrVec[i][a] * DEG, y: R.w[i][a] * DEG,
+      })), { pointRadius: 0, borderWidth: 1.2 })) };
+  }
+
+  // 切換相圖模式（由完整紀錄重建資料）
+  setPhaseMode(mode) {
+    this.phaseMode = mode;
+    if (!this.charts.phase) return;
+    const R = this.sim.record;
+    Object.assign(this.charts.phase.data, this.phaseData());
+    const sc = this.charts.phase.options.scales;
+    sc.x.title.text = mode === 'axes' ? '各軸誤差角 δ [deg]' : '總誤差角 |δ| [deg]';
+    sc.y.title.text = mode === 'axes' ? '各軸角速度 ω [deg/s]' : '總角速度 |ω| [deg/s]';
+    this.lastIdx.phase = R.t.length;
+    this.charts.phase.update('none');
   }
 
   mapT(tArr, fn) {
@@ -127,13 +175,16 @@ export class PlotManager {
     return out;
   }
 
-  mkChart(id, cfg, extraScales = {}) {
+  mkChart(id, cfg, extraScales = {}, xy = false) {
     const cvs = document.createElement('canvas');
     cvs.dataset.testid = `chart-${id}`;
     this.container.appendChild(cvs);
-    const opts = baseOpts();
+    const opts = baseOpts(cfg.datasets.length > 4, xy);
     Object.assign(opts.scales, extraScales);
-    return new Chart(cvs, { type: 'line', data: cfg, options: opts });
+    const chart = new Chart(cvs, { type: 'line', data: cfg, options: opts });
+    // 雙擊重設縮放
+    cvs.addEventListener('dblclick', () => chart.resetZoom());
+    return chart;
   }
 
   show(tab) {
@@ -144,7 +195,7 @@ export class PlotManager {
     });
   }
 
-  // 即時更新（自上次以後的新記錄點附加）
+  // 即時更新（自上次以後的新記錄點附加；保留使用者縮放狀態）
   refresh() {
     if (!this.sim) return;
     const R = this.sim.record;
@@ -152,7 +203,6 @@ export class PlotManager {
     for (const [k, chart] of Object.entries(this.charts)) {
       const start = this.lastIdx[k] ?? 0;
       if (start >= n) continue;
-      const t0 = start > 0 ? R.t[start - 1] : R.t[0];
       const idxs = [];
       for (let i = Math.max(0, start - 1); i < n; i++) idxs.push(i);
       switch (k) {
@@ -174,9 +224,14 @@ export class PlotManager {
           Math.hypot(R.v[i][0] - R.v[0][0], R.v[i][1] - R.v[0][1], R.v[i][2] - R.v[0][2]),
         ]); break;
         case 'phase': {
-          for (const i of idxs)
-            for (let a = 0; a < 3; a++)
-              chart.data.datasets[a].data.push({ x: R.attErrVec[i][a] * DEG, y: R.w[i][a] * DEG });
+          if (this.phaseMode === 'total') {
+            for (const i of idxs)
+              chart.data.datasets[0].data.push({ x: R.attErr[i] * DEG, y: Math.hypot(...R.w[i]) * DEG });
+          } else {
+            for (const i of idxs)
+              for (let a = 0; a < 3; a++)
+                chart.data.datasets[a].data.push({ x: R.attErrVec[i][a] * DEG, y: R.w[i][a] * DEG });
+          }
           break;
         }
       }
